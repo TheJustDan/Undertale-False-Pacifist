@@ -73,11 +73,6 @@ namespace Undertale_False_Pacifist
                 pixelFont = new Font(pfc.Families[0], 18, FontStyle.Regular);
                 pixelFontSmall = new Font(pfc.Families[0], 14, FontStyle.Regular);
             }
-            else
-            {
-                pixelFont = new Font("Courier New", 18, FontStyle.Bold);
-                pixelFontSmall = new Font("Courier New", 14, FontStyle.Bold);
-            }
 
             string columnPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "textures", "column.bmp");
             if (File.Exists(columnPath))
@@ -127,50 +122,10 @@ namespace Undertale_False_Pacifist
             gameTimer.Start();
             LoadColumns();
 
-            this.MouseDown += Form1_MouseDown;
             this.KeyDown += (s, e) => pressedKeys.Add(e.KeyCode);
             this.KeyUp += (s, e) => pressedKeys.Remove(e.KeyCode);
         }
-
-        private void Form1_MouseDown(object sender, MouseEventArgs e)
-        {
-            float viewportWorldWidth = this.ClientSize.Width / cameraZoom;
-            float playerCenterX = player.X + (player.Width / 2f);
-            float currentCameraX = playerCenterX - (viewportWorldWidth / 2f);
-
-            if (locationBackground != null)
-            {
-                currentCameraX = ClampCamera(currentCameraX, viewportWorldWidth, LocationWorldWidth);
-            }
-
-            if (e.Button == MouseButtons.Left)
-            {
-                float colWorldX = (e.X / cameraZoom) + (currentCameraX * parallaxFactor);
-
-                foregroundColumns.Add(colWorldX);
-                SaveColumns();
-                this.Invalidate();
-            }
-            else if (e.Button == MouseButtons.Right && columnTexture != null)
-            {
-                for (int i = foregroundColumns.Count - 1; i >= 0; i--)
-                {
-                    float colX = foregroundColumns[i];
-
-                    float colScreenX = (colX - (currentCameraX * parallaxFactor)) * cameraZoom;
-                    float colScreenWidth = columnTexture.Width * cameraZoom;
-
-                    if (e.X >= colScreenX && e.X <= colScreenX + colScreenWidth)
-                    {
-                        foregroundColumns.RemoveAt(i);
-                        SaveColumns();
-                        this.Invalidate();
-                        break;
-                    }
-                }
-            }
-        }
-
+             
         private void LoadColumns()
         {
             if (File.Exists(columnsFilePath))
@@ -186,33 +141,9 @@ namespace Undertale_False_Pacifist
             }
         }
 
-        private void SaveColumns()
-        {
-            List<string> lines = new List<string>();
-            foreach (float x in foregroundColumns)
-            {
-                lines.Add(x.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            }
-            File.WriteAllLines(columnsFilePath, lines);
-        }
-
         private void Form1_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Control && e.KeyCode == Keys.V)
-            {
-                float viewportWorldWidth = this.ClientSize.Width / cameraZoom;
-                float playerCenterX = player.X + (player.Width / 2f);
-                float currentCameraX = playerCenterX - (viewportWorldWidth / 2f);
-
-                if (locationBackground != null)
-                    currentCameraX = ClampCamera(currentCameraX, viewportWorldWidth, LocationWorldWidth);
-                float colWorldX = player.X + (currentCameraX * (parallaxFactor - 1f));
-
-                foregroundColumns.Add(colWorldX);
-                this.Invalidate();
-                return;
-            }
-
+          
             if (e.KeyCode == Keys.C)
             {
                 isMenuOpen = !isMenuOpen;
