@@ -10,7 +10,7 @@ public class Player
 
     public int Direction { get; set; } = 0;
     public int Frame { get; set; } = 0;
-    public float Speed { get; set; } = 2f;
+    public float Speed { get; set; } = 1.7f;
     public bool IsMoving { get; set; } = false;
 
     private int animCounter = 0;
