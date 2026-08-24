@@ -8,18 +8,25 @@ using System.Windows.Forms;
 
 namespace Undertale_False_Pacifist
 {
-    public partial class Form1 : Form
+    public partial class Undertale : Form
     {
 
         private class IntroScene
         {
             public Bitmap Image;
             public List<string> Lines;
+            public bool IsInstant;
 
-            public IntroScene(Bitmap image, params string[] lines)
+            public IntroScene(Bitmap image, bool isInstant, params string[] lines)
             {
                 Image = image;
+                IsInstant = isInstant;
                 Lines = new List<string>(lines);
+            }
+
+            public IntroScene(Bitmap image, params string[] lines)
+                : this(image, false, lines)
+            {
             }
         }
 
@@ -27,7 +34,7 @@ namespace Undertale_False_Pacifist
 
         private bool introActive = false;
         private List<IntroScene> introScenes = new List<IntroScene>();
-        private Bitmap[] introBitmaps = new Bitmap[10];
+        private Bitmap[] introBitmaps = new Bitmap[13];
 
         private int introSceneIndex = 0;
         private int introLineIndex = 0;
@@ -40,6 +47,8 @@ namespace Undertale_False_Pacifist
         private float introFadeAlpha = 255f;
         private const float IntroFadeSpeed = 7f;
         private const float IntroImageScale = 1.15f;
+
+        private const float LogoSceneImageYOffset = 60f;
 
         private int introHoldTimer = 0;
 
@@ -76,7 +85,7 @@ namespace Undertale_False_Pacifist
 
             string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "textures", "intro");
 
-            for (int i = 0; i < 10; i++)
+            for (int i = 0; i < 13; i++)
             {
                 string path = Path.Combine(dir, $"{i + 1}.bmp");
                 introBitmaps[i] = File.Exists(path) ? new Bitmap(path) : null;
@@ -85,7 +94,7 @@ namespace Undertale_False_Pacifist
             introScenes = new List<IntroScene>
             {
                 new IntroScene(introBitmaps[0],
-                    "But it already has a \ndifferent owner."),
+                    "Long, long ago, two races \nruled the Earth: HUMANS \nand MONSTERS."),
 
                 new IntroScene(introBitmaps[1],
                     "One day, a war broke out \nbetween them..."),
@@ -120,7 +129,14 @@ namespace Undertale_False_Pacifist
                     "Do you believe you can \nfix everything?",
                     "Do you believe that \nthis world has \nforgotten the taste \nof dust?",
                     "The fairy tale begins \nagain.",
-                    "But it already has a \ndifferent owner.")
+                    "But it already has a \ndifferent owner."),
+
+                new IntroScene(introBitmaps[10], true, ""),
+
+                new IntroScene(introBitmaps[11], true,
+                    "Undertale by Toby Fox\n\nUndertale False Pacifist \nby The Just Dan\n\nTextures by Toby fox\n\nSounds by Toby Fox"),
+
+                new IntroScene(introBitmaps[12], true, "")
             };
         }
 
@@ -131,12 +147,30 @@ namespace Undertale_False_Pacifist
             introActive = true;
             introSceneIndex = 0;
             introLineIndex = 0;
-            introCharProgress = 0f;
-            introFadeAlpha = 255f;
-            introPhase = IntroPhase.FadeIn;
+
+            IntroScene firstScene = introScenes[0];
+            PrepareIntroLineWrap();
+
+            if (firstScene.IsInstant)
+            {
+                introFadeAlpha = 0f;
+                introPhase = IntroPhase.Typing;
+
+                if (firstScene.Lines.Count > 0)
+                {
+                    introCharProgress = firstScene.Lines[introLineIndex].Length;
+                }
+
+                PlaySoundEffect("logo.mp3");
+            }
+            else
+            {
+                introCharProgress = 0f;
+                introFadeAlpha = 255f;
+                introPhase = IntroPhase.FadeIn;
+            }
 
             StopMusic();
-            PrepareIntroLineWrap();
         }
 
         private void EndIntro()
@@ -147,14 +181,16 @@ namespace Undertale_False_Pacifist
             gameFadeInActive = true;
             gameFadeInAlpha = 255f;
 
-            PlayLocationMusic();
+            if (introSceneIndex < 12)
+            {
+                PlayLocationMusic();
+            }
         }
 
         private void SkipIntro()
         {
             EndIntro();
         }
-
 
         private void UpdateIntro()
         {
@@ -175,7 +211,19 @@ namespace Undertale_False_Pacifist
 
                         if (introCharProgress < fullText.Length)
                         {
+                            int prevCount = (int)introCharProgress;
                             introCharProgress = Math.Min(fullText.Length, introCharProgress + IntroCharsPerTick);
+                            int currentCount = (int)introCharProgress;
+
+                            if (currentCount > prevCount)
+                            {
+                                char newChar = fullText[currentCount - 1];
+
+                                if (newChar != ' ' && newChar != '\n' && newChar != '\r')
+                                {
+                                    PlaySoundEffect("text.mp3");
+                                }
+                            }
                         }
 
                         if (introCharProgress >= fullText.Length)
@@ -217,7 +265,14 @@ namespace Undertale_False_Pacifist
 
             if (introLineIndex >= introScenes[introSceneIndex].Lines.Count)
             {
-                introPhase = IntroPhase.FadeOut;
+                if (introScenes[introSceneIndex].IsInstant)
+                {
+                    AdvanceIntroScene();
+                }
+                else
+                {
+                    introPhase = IntroPhase.FadeOut;
+                }
             }
             else
             {
@@ -230,7 +285,6 @@ namespace Undertale_False_Pacifist
         {
             introSceneIndex++;
             introLineIndex = 0;
-            introCharProgress = 0f;
 
             if (introSceneIndex >= introScenes.Count)
             {
@@ -238,32 +292,43 @@ namespace Undertale_False_Pacifist
             }
             else
             {
+                IntroScene currentScene = introScenes[introSceneIndex];
                 PrepareIntroLineWrap();
-                introFadeAlpha = 255f;
-                introPhase = IntroPhase.FadeIn;
+
+                if (currentScene.IsInstant)
+                {
+                    introFadeAlpha = 0f;
+                    introPhase = IntroPhase.Typing;
+
+                    if (currentScene.Lines.Count > 0)
+                    {
+                        introCharProgress = currentScene.Lines[introLineIndex].Length;
+                    }
+                    else
+                    {
+                        introCharProgress = 0f;
+                    }
+
+                    if (introSceneIndex == 12)
+                    {
+                        PlayLocationMusic();
+                    }
+                    else
+                    {
+                        PlaySoundEffect("logo.mp3");
+                    }
+                }
+                else
+                {
+                    introCharProgress = 0f;
+                    introFadeAlpha = 255f;
+                    introPhase = IntroPhase.FadeIn;
+                }
             }
         }
-
         private void HandleIntroKeyDown(Keys key)
         {
-            if (key == Keys.Escape)
-            {
-                SkipIntro();
-                return;
-            }
 
-            if (key == Keys.Z || key == Keys.Enter)
-            {
-                if (introPhase == IntroPhase.Typing)
-                {
-                    string fullText = introScenes[introSceneIndex].Lines[introLineIndex];
-                    introCharProgress = fullText.Length;
-                }
-                else if (introPhase == IntroPhase.Hold)
-                {
-                    AdvanceIntroLine();
-                }
-            }
         }
 
         private void PrepareIntroLineWrap()
@@ -313,6 +378,7 @@ namespace Undertale_False_Pacifist
         private const float IntroTextAreaHeight = 150f;
         private const float IntroImageTopMargin = 20f;
         private const float IntroTextLeftMargin = 150f;
+        private const float IntroTextBottomMargin = 150f;
 
         private void DrawIntro(Graphics g, float virtualWidth, float virtualHeight)
         {
@@ -371,6 +437,12 @@ namespace Undertale_False_Pacifist
             float drawX = boxCenterX - drawW / 2f;
             float drawY = boxCenterY - drawH / 2f;
 
+            // Логотип (11.bmp, сцена index 10) - опустить чуть ниже стандартной позиции
+            if (introSceneIndex == 10)
+            {
+                drawY += LogoSceneImageYOffset;
+            }
+
             g.DrawImage(image, drawX, drawY, drawW, drawH);
 
             introImageBottomY = drawY + drawH;
@@ -383,7 +455,25 @@ namespace Undertale_False_Pacifist
 
             float lineHeight = introFont.GetHeight(g) + 6f;
 
-            float startY = introImageBottomY - 180f;
+            IntroScene currentScene = introScenes[introSceneIndex];
+            float startY;
+
+            if (currentScene.Image != null)
+            {
+                startY = introImageBottomY - 180f;
+            }
+            else
+            {
+                startY = 330f;
+            }
+
+            float blockBottom = startY + introWrappedLines.Count * lineHeight;
+            float maxBottomY = virtualHeight - IntroTextBottomMargin;
+
+            if (blockBottom > maxBottomY)
+            {
+                startY -= (blockBottom - maxBottomY);
+            }
 
             int remaining = (int)introCharProgress;
 
@@ -392,7 +482,7 @@ namespace Undertale_False_Pacifist
                 string lineText = introWrappedLines[i];
                 int take = Math.Max(0, Math.Min(remaining, lineText.Length));
                 string visible = lineText.Substring(0, take);
-                remaining -= lineText.Length + 1; 
+                remaining -= lineText.Length + 1;
 
                 if (visible.Length > 0)
                 {
