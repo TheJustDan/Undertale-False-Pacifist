@@ -5,11 +5,10 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.IO;
 using System.Windows.Forms;
-using System.Runtime.InteropServices;
 
 namespace Undertale_False_Pacifist
 {
-    public partial class Form1 : Form
+    public partial class Undertale : Form
     {
         private System.Windows.Forms.Timer gameTimer;
         private Player player;
@@ -61,6 +60,33 @@ namespace Undertale_False_Pacifist
         private const float TriggerRadius = 8f;
         private string sansTriggerFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sans_trigger_data.txt");
 
+        private struct RoomTriggerPoint
+        {
+            public PointF Pos;
+            public string TargetRoom;
+            public float? SpawnX;
+            public float? SpawnY;
+        }
+
+        private List<RoomTriggerPoint> roomTriggers = new List<RoomTriggerPoint>();
+        private bool wasInCastleTriggerZone = false;
+
+        private bool isRoomTransitioning = false;
+        private bool roomTransitionFadingOut = true;
+        private float roomTransitionAlpha = 0f;
+        private const float RoomTransitionSpeed = 12f;
+        private string pendingRoomName = null;
+        private PointF? pendingRoomSpawn = null;
+
+        private Dictionary<string, Bitmap> roomPlayerSprites = new Dictionary<string, Bitmap>();
+
+        private const float CastleTriggerRadius = 10f;
+        private const float CastleTriggerRemoveRadius = 12f;
+        private string castleTriggersFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "castle_trigger_data.txt");
+
+        private Dictionary<string, Bitmap> roomBackgrounds = new Dictionary<string, Bitmap>();
+        private Dictionary<string, PointF> roomSpawns = new Dictionary<string, PointF>();
+
         private enum SansCutsceneStage
         {
             None,
@@ -102,9 +128,19 @@ namespace Undertale_False_Pacifist
         private Bitmap inventoryBox;
         private Bitmap heartTexture;
         private Bitmap locationBackground;
+        private Bitmap castleBackground;
         private float cameraZoom = 2.5f;
         private float cutsceneCameraZoom = 2.5f;
-        private float CurrentCameraZoom => sansEncounterCameraLocked ? cutsceneCameraZoom : cameraZoom;
+        private Dictionary<string, float> roomCameraZoom = new Dictionary<string, float>
+        {
+            { "castle_finalshoehorn", 2.5f }
+        };
+        private Dictionary<string, PointF> roomCameraOffset = new Dictionary<string, PointF>
+        {
+            { "castle_finalshoehorn", new PointF(20f, 20f) }
+        };
+        private float BaseCameraZoom => roomCameraZoom.TryGetValue(currentLocationName, out float z) ? z : cameraZoom;
+        private float CurrentCameraZoom => sansEncounterCameraLocked ? cutsceneCameraZoom : BaseCameraZoom;
         private float LocationWorldWidth => locationBackground != null ? locationBackground.Width : 0f;
         private float LocationWorldHeight => locationBackground != null ? locationBackground.Height : 0f;
 
@@ -133,19 +169,68 @@ namespace Undertale_False_Pacifist
         private string EquippedArmor = "None";
         private int Gold = 0;
 
+        public struct CollisionBox
+        {
+            public RectangleF Rect;
+            public CollisionBox(float x, float y, float width, float height)
+            {
+                Rect = new RectangleF(x, y, width, height);
+            }
+        }
+
+        private List<CollisionBox> collisionBoxes = new List<CollisionBox>();
+        private string collisionsFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "collisions_data.txt");
+
+        private bool showCollisions = false;
+        private PointF collisionDragStart;
+        private PointF collisionDragCurrent;
+        private bool isCreatingCollision = false;
+
         private Bitmap columnTexture;
         private List<float> foregroundColumns = new List<float>();
 
         private float parallaxFactor = 2f;
         private string columnsFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "columns_data.txt");
 
+        private struct WallObject
+        {
+            public PointF Pos; // точка "основания" стены (низ текстуры) - используется для сортировки по глубине
+        }
+
+        private Bitmap wallTexture;
+        private List<WallObject> worldWalls = new List<WallObject>();
+        private string wallsFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "walls_data.txt");
+        private const float WallRemoveRadius = 12f;
+
+        private string RoomCollisionsPath(string roomName)
+        {
+            if (roomName == "last_corridor") return collisionsFilePath;
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "collisions_data_" + roomName + ".txt");
+        }
+
+        private string RoomColumnsPath(string roomName)
+        {
+            if (roomName == "last_corridor") return columnsFilePath;
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "columns_data_" + roomName + ".txt");
+        }
+
+        private string RoomWallsPath(string roomName)
+        {
+            if (roomName == "last_corridor") return wallsFilePath;
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "walls_data_" + roomName + ".txt");
+        }
+
+        private string RoomTriggersPath(string roomName)
+        {
+            if (roomName == "last_corridor") return castleTriggersFilePath;
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "trigger_data_" + roomName + ".txt");
+        }
+
         private List<Item> inventory = new List<Item>();
 
         private bool isFullscreen = false;
         private Rectangle windowedBounds;
 
-<<<<<<< HEAD
-=======
         private FMOD.System fmodSystem;
         private FMOD.Sound bgmSound;
         private FMOD.Channel bgmChannel;
@@ -162,8 +247,7 @@ namespace Undertale_False_Pacifist
         private string currentMusic = "";
         private string currentLocationName = "last_corridor";
 
->>>>>>> Обязательно
-        public Form1()
+        public Undertale()
         {
             InitializeComponent();
 
@@ -217,6 +301,13 @@ namespace Undertale_False_Pacifist
                 columnTexture.MakeTransparent(Color.White);
             }
 
+            string wallPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "textures", "wall.bmp");
+            if (File.Exists(wallPath))
+            {
+                wallTexture = new Bitmap(wallPath);
+                wallTexture.MakeTransparent(Color.White);
+            }
+
             string spritePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "textures", "dark_frisk.bmp");
 
             if (File.Exists(spritePath))
@@ -224,6 +315,17 @@ namespace Undertale_False_Pacifist
                 friskSprite = new Bitmap(spritePath);
                 friskSprite.MakeTransparent(Color.White);
             }
+
+            string friskAltPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "textures", "frisk.bmp");
+            Bitmap friskAltSprite = null;
+            if (File.Exists(friskAltPath))
+            {
+                friskAltSprite = new Bitmap(friskAltPath);
+                friskAltSprite.MakeTransparent(Color.White);
+            }
+
+            roomPlayerSprites["last_corridor"] = friskSprite;
+            roomPlayerSprites["castle_finalshoehorn"] = friskAltSprite ?? friskSprite;
 
             string sansPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "textures", "sans.bmp");
             if (File.Exists(sansPath))
@@ -259,6 +361,18 @@ namespace Undertale_False_Pacifist
                 locationBackground = new Bitmap(locationPath);
             }
 
+            string castleRoomPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "textures", "room_castle_finalshoehorn.bmp");
+            if (File.Exists(castleRoomPath))
+            {
+                castleBackground = new Bitmap(castleRoomPath);
+            }
+
+            roomBackgrounds["last_corridor"] = locationBackground;
+            roomBackgrounds["castle_finalshoehorn"] = castleBackground;
+
+            roomSpawns["last_corridor"] = new PointF(105f, 100f);
+            roomSpawns["castle_finalshoehorn"] = new PointF(150f, 150f);
+
             inventory.Add(new Item("Stick", "A standard stick."));
             inventory.Add(new Item("Bandage", "Heals 10 HP."));
 
@@ -271,21 +385,272 @@ namespace Undertale_False_Pacifist
             gameTimer.Tick += GameLoop;
             gameTimer.Start();
 
-<<<<<<< HEAD
-            LoadColumns();
-=======
             StartIntro();
             LoadColumns();
+            LoadWalls();
             LoadSansTrigger();
->>>>>>> Обязательно
-            PlayLocationMusic();
+            LoadCollisions();
+            LoadCastleTriggers();
+
+
+            this.MouseDown += Form1_MouseDown;
+            this.MouseMove += Form1_MouseMove;
+            this.MouseUp += Form1_MouseUp;
 
             this.KeyDown += (s, e) => pressedKeys.Add(e.KeyCode);
             this.KeyUp += (s, e) => pressedKeys.Remove(e.KeyCode);
         }
 
-<<<<<<< HEAD
-=======
+        private void Form1_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (isCreatingCollision)
+            {
+                collisionDragCurrent = ScreenToWorld(e.Location);
+                this.Invalidate();
+            }
+        }
+
+        private void Form1_MouseDown(object sender, MouseEventArgs e)
+        {
+            // Работает только если включен режим разработчика (F3)
+            if (!showCollisions) return;
+            if (introActive || isMenuOpen || isDialogueActive || IsSansCutsceneActive) return;
+
+            PointF worldPos = ScreenToWorld(e.Location);
+
+            // 1. УПРАВЛЕНИЕ ТРИГГЕРАМИ (Зажат SHIFT)
+            if (Control.ModifierKeys == Keys.Shift)
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    // Установить триггер
+                    roomTriggers.Add(new RoomTriggerPoint
+                    {
+                        Pos = worldPos,
+                        TargetRoom = GetOtherRoom(currentLocationName)
+                    });
+                    SaveCastleTriggers();
+                    this.Invalidate();
+                }
+                else if (e.Button == MouseButtons.Right)
+                {
+                    // Удалить триггер
+                    int closestIndex = -1;
+                    float closestDist = float.MaxValue;
+
+                    for (int i = 0; i < roomTriggers.Count; i++)
+                    {
+                        float dx = roomTriggers[i].Pos.X - worldPos.X;
+                        float dy = roomTriggers[i].Pos.Y - worldPos.Y;
+                        float dist = (float)Math.Sqrt(dx * dx + dy * dy);
+
+                        if (dist < closestDist)
+                        {
+                            closestDist = dist;
+                            closestIndex = i;
+                        }
+                    }
+
+                    if (closestIndex >= 0 && closestDist <= CastleTriggerRemoveRadius)
+                    {
+                        roomTriggers.RemoveAt(closestIndex);
+                        SaveCastleTriggers();
+                        this.Invalidate();
+                    }
+                }
+                return;
+            }
+
+            if (e.Button == MouseButtons.Left)
+            {
+                isCreatingCollision = true;
+                collisionDragStart = worldPos;
+                collisionDragCurrent = worldPos;
+            }
+            else if (e.Button == MouseButtons.Right)
+            {
+                for (int i = collisionBoxes.Count - 1; i >= 0; i--)
+                {
+                    if (collisionBoxes[i].Rect.Contains(worldPos))
+                    {
+                        collisionBoxes.RemoveAt(i);
+                        SaveCollisions();
+                        PlaySoundEffect("move.mp3");
+                        this.Invalidate();
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void Form1_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left && isCreatingCollision)
+            {
+                isCreatingCollision = false;
+
+                float x = Math.Min(collisionDragStart.X, collisionDragCurrent.X);
+                float y = Math.Min(collisionDragStart.Y, collisionDragCurrent.Y);
+                float w = Math.Abs(collisionDragCurrent.X - collisionDragStart.X);
+                float h = Math.Abs(collisionDragCurrent.Y - collisionDragStart.Y);
+
+                if (w >= 2f && h >= 2f)
+                {
+                    collisionBoxes.Add(new CollisionBox(x, y, w, h));
+                    SaveCollisions();
+                    PlaySoundEffect("move.mp3");
+                }
+                this.Invalidate();
+            }
+        }
+
+        private void LoadCollisions()
+        {
+            collisionBoxes.Clear();
+            string path = RoomCollisionsPath(currentLocationName);
+            if (!File.Exists(path)) return;
+
+            try
+            {
+                string[] lines = File.ReadAllLines(path);
+                foreach (string line in lines)
+                {
+                    string[] p = line.Split(',');
+                    if (p.Length == 4 &&
+                        float.TryParse(p[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float x) &&
+                        float.TryParse(p[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float y) &&
+                        float.TryParse(p[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float w) &&
+                        float.TryParse(p[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float h))
+                    {
+                        collisionBoxes.Add(new CollisionBox(x, y, w, h));
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void SaveCollisions()
+        {
+            try
+            {
+                string path = RoomCollisionsPath(currentLocationName);
+                List<string> lines = new List<string>();
+                foreach (var box in collisionBoxes)
+                {
+                    string line = string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0},{1},{2},{3}",
+                        box.Rect.X, box.Rect.Y, box.Rect.Width, box.Rect.Height);
+                    lines.Add(line);
+                }
+                File.WriteAllLines(path, lines);
+            }
+            catch { }
+        }
+
+        private List<RoomTriggerPoint> ReadRoomTriggersFile(string roomName)
+        {
+            List<RoomTriggerPoint> result = new List<RoomTriggerPoint>();
+            string path = RoomTriggersPath(roomName);
+            if (!File.Exists(path)) return result;
+
+            try
+            {
+                string[] lines = File.ReadAllLines(path);
+                foreach (string line in lines)
+                {
+                    string[] p = line.Split(',');
+                    if (p.Length >= 2 &&
+                        float.TryParse(p[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float x) &&
+                        float.TryParse(p[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float y))
+                    {
+                        string target = (p.Length >= 3 && !string.IsNullOrWhiteSpace(p[2]))
+                            ? p[2].Trim()
+                            : GetOtherRoom(roomName);
+
+                        float? spawnX = null;
+                        float? spawnY = null;
+                        if (p.Length >= 5 &&
+                            float.TryParse(p[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float sx) &&
+                            float.TryParse(p[4], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float sy))
+                        {
+                            spawnX = sx;
+                            spawnY = sy;
+                        }
+
+                        result.Add(new RoomTriggerPoint { Pos = new PointF(x, y), TargetRoom = target, SpawnX = spawnX, SpawnY = spawnY });
+                    }
+                }
+            }
+            catch { }
+
+            return result;
+        }
+
+        private void LoadCastleTriggers()
+        {
+            roomTriggers = ReadRoomTriggersFile(currentLocationName);
+        }
+
+        private void SaveCastleTriggers()
+        {
+            try
+            {
+                string path = RoomTriggersPath(currentLocationName);
+                List<string> lines = new List<string>();
+                foreach (var t in roomTriggers)
+                {
+                    if (t.SpawnX.HasValue && t.SpawnY.HasValue)
+                    {
+                        lines.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0},{1},{2},{3},{4}",
+                            t.Pos.X, t.Pos.Y, t.TargetRoom, t.SpawnX.Value, t.SpawnY.Value));
+                    }
+                    else
+                    {
+                        lines.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0},{1},{2}", t.Pos.X, t.Pos.Y, t.TargetRoom));
+                    }
+                }
+                File.WriteAllLines(path, lines);
+            }
+            catch { }
+        }
+
+        private PointF ScreenToWorld(Point screenPoint)
+        {
+            float virtualWidth = 800f;
+            float virtualHeight = 600f;
+
+            float screenScale = Math.Min(this.ClientSize.Width / virtualWidth, this.ClientSize.Height / virtualHeight);
+            float screenOffsetX = (this.ClientSize.Width - (virtualWidth * screenScale)) / 2f;
+            float screenOffsetY = (this.ClientSize.Height - (virtualHeight * screenScale)) / 2f;
+
+            float virtX = (screenPoint.X - screenOffsetX) / screenScale;
+            float virtY = (screenPoint.Y - screenOffsetY) / screenScale;
+
+            float cameraX = lastCameraX;
+            float cameraY = lastCameraY;
+
+            float worldX = (virtX / CurrentCameraZoom) + cameraX;
+            float worldY = (virtY / CurrentCameraZoom) + cameraY;
+
+            return new PointF(worldX, worldY);
+        }
+
+        private bool CheckCollision(float nextX, float nextY, float width, float height)
+        {
+            RectangleF futureHitbox = new RectangleF(
+                nextX + player.HitboxOffsetX,
+                nextY + player.HitboxOffsetY,
+                width,
+                height
+            );
+
+            foreach (var box in collisionBoxes)
+            {
+                if (futureHitbox.IntersectsWith(box.Rect))
+                    return true;
+            }
+            return false;
+        }
+
         private void InitFMOD()
         {
             FMOD.RESULT result = FMOD.Factory.System_Create(out fmodSystem);
@@ -370,6 +735,10 @@ namespace Undertale_False_Pacifist
             {
                 targetMusic = "background.mp3";
             }
+            else if (currentLocationName == "castle_finalshoehorn")
+            {
+                targetMusic = "castle.mp3";
+            }
 
             if (currentMusic == targetMusic) return;
 
@@ -389,6 +758,93 @@ namespace Undertale_False_Pacifist
                     }
                 }
             }
+        }
+
+        private string GetOtherRoom(string currentRoom)
+        {
+            return currentRoom == "last_corridor" ? "castle_finalshoehorn" : "last_corridor";
+        }
+
+        private void EnterRoom(string roomName, PointF? spawnOverride = null)
+        {
+            if (!roomBackgrounds.TryGetValue(roomName, out Bitmap bg) || bg == null) return;
+            if (isRoomTransitioning) return;
+
+            pendingRoomName = roomName;
+            pendingRoomSpawn = spawnOverride;
+            isRoomTransitioning = true;
+            roomTransitionFadingOut = true;
+            roomTransitionAlpha = 0f;
+        }
+
+        private void PerformRoomSwitch(string roomName, PointF? spawnOverride)
+        {
+            if (!roomBackgrounds.TryGetValue(roomName, out Bitmap bg) || bg == null) return;
+
+            string fromRoom = currentLocationName;
+
+            locationBackground = bg;
+            currentLocationName = roomName;
+
+            if (roomPlayerSprites.TryGetValue(roomName, out Bitmap sprite) && sprite != null)
+            {
+                friskSprite = sprite;
+            }
+
+            PointF spawn;
+            bool spawnedAtDoor;
+
+            if (spawnOverride.HasValue)
+            {
+                spawn = spawnOverride.Value;
+                spawnedAtDoor = true;
+            }
+            else if (roomSpawns.TryGetValue(roomName, out PointF s))
+            {
+                spawn = s;
+                spawnedAtDoor = false;
+            }
+            else
+            {
+                RoomTriggerPoint? pairedDoor = null;
+                foreach (var t in ReadRoomTriggersFile(roomName))
+                {
+                    if (t.TargetRoom == fromRoom)
+                    {
+                        pairedDoor = t;
+                        break;
+                    }
+                }
+
+                if (pairedDoor.HasValue)
+                {
+                    spawn = pairedDoor.Value.Pos;
+                    spawnedAtDoor = true;
+                }
+                else
+                {
+                    spawn = new PointF(105f, 100f);
+                    spawnedAtDoor = false;
+                }
+            }
+
+            player.X = spawn.X;
+            player.Y = spawn.Y;
+
+            lastCameraX = 0f;
+            lastCameraY = 0f;
+
+            LoadCollisions();
+            LoadColumns();
+            LoadWalls();
+            LoadCastleTriggers();
+
+            // если заспавнились прямо на парной двери - считаем, что уже "внутри" её зоны,
+            // иначе она сразу сработает обратно и телепортирует туда-обратно по кругу
+            wasInCastleTriggerZone = spawnedAtDoor;
+
+            PlayLocationMusic();
+            this.Invalidate();
         }
 
         private void StopMusic()
@@ -422,12 +878,14 @@ namespace Undertale_False_Pacifist
             base.OnFormClosing(e);
         }
 
->>>>>>> Обязательно
         private void LoadColumns()
         {
-            if (File.Exists(columnsFilePath))
+            foregroundColumns.Clear();
+            string path = RoomColumnsPath(currentLocationName);
+
+            if (File.Exists(path))
             {
-                string[] lines = File.ReadAllLines(columnsFilePath);
+                string[] lines = File.ReadAllLines(path);
                 foreach (string line in lines)
                 {
                     if (float.TryParse(line, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float x))
@@ -438,56 +896,44 @@ namespace Undertale_False_Pacifist
             }
         }
 
-<<<<<<< HEAD
-        // --- Аудио система ---
-        [DllImport("winmm.dll")]
-        private static extern long mciSendString(string strCommand, string strReturn, int iReturnLength, IntPtr hwndCallback);
-
-        private string currentMusic = "";
-        private string currentLocationName = "last_corridor";
-
-        private void PlaySoundEffect(string soundFileName)
+        private void LoadWalls()
         {
-            string soundPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sounds", soundFileName);
-            if (File.Exists(soundPath))
+            worldWalls.Clear();
+            string path = RoomWallsPath(currentLocationName);
+            if (!File.Exists(path)) return;
+
+            try
             {
-                mciSendString("close sfx", null, 0, IntPtr.Zero);
-                mciSendString($"open \"{soundPath}\" type mpegvideo alias sfx", null, 0, IntPtr.Zero);
-                mciSendString("play sfx", null, 0, IntPtr.Zero);
-            }
-        }
-
-        private void PlayLocationMusic()
-        {
-            string targetMusic = "";
-
-            if (currentLocationName == "last_corridor")
-            {
-                targetMusic = "background.mp3";
-            }
-
-            if (currentMusic == targetMusic) return;
-
-            mciSendString("close bgm", null, 0, IntPtr.Zero);
-            currentMusic = "";
-
-            if (!string.IsNullOrEmpty(targetMusic))
-            {
-                string musicPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sounds", targetMusic);
-                if (File.Exists(musicPath))
+                string[] lines = File.ReadAllLines(path);
+                foreach (string line in lines)
                 {
-                    mciSendString($"open \"{musicPath}\" type mpegvideo alias bgm", null, 0, IntPtr.Zero);
-                    mciSendString("play bgm repeat", null, 0, IntPtr.Zero);
-                    currentMusic = targetMusic;
+                    string[] p = line.Split(',');
+                    if (p.Length == 2 &&
+                        float.TryParse(p[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float x) &&
+                        float.TryParse(p[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float y))
+                    {
+                        worldWalls.Add(new WallObject { Pos = new PointF(x, y) });
+                    }
                 }
             }
+            catch { }
         }
 
-        private void StopMusic()
+        private void SaveWalls()
         {
-            mciSendString("close bgm", null, 0, IntPtr.Zero);
-            currentMusic = "";
-=======
+            try
+            {
+                string path = RoomWallsPath(currentLocationName);
+                List<string> lines = new List<string>();
+                foreach (var w in worldWalls)
+                {
+                    lines.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0},{1}", w.Pos.X, w.Pos.Y));
+                }
+                File.WriteAllLines(path, lines);
+            }
+            catch { }
+        }
+
         private void LoadSansTrigger()
         {
             if (!File.Exists(sansTriggerFilePath)) return;
@@ -509,7 +955,6 @@ namespace Undertale_False_Pacifist
             catch
             {
             }
->>>>>>> Обязательно
         }
 
         private void ToggleFullscreen()
@@ -533,11 +978,17 @@ namespace Undertale_False_Pacifist
 
         private void Form1_KeyDown(object sender, KeyEventArgs e)
         {
+
             if (e.KeyCode == Keys.F4)
             {
                 ToggleFullscreen();
-<<<<<<< HEAD
-=======
+                return;
+            }
+
+            if (e.KeyCode == Keys.F3)
+            {
+                showCollisions = !showCollisions;
+                this.Invalidate();
                 return;
             }
 
@@ -558,7 +1009,6 @@ namespace Undertale_False_Pacifist
 
             if (IsSansCutsceneActive)
             {
->>>>>>> Обязательно
                 return;
             }
 
@@ -700,10 +1150,38 @@ namespace Undertale_False_Pacifist
                 }
             }
 
+            if (isRoomTransitioning)
+            {
+                if (roomTransitionFadingOut)
+                {
+                    roomTransitionAlpha += RoomTransitionSpeed;
+                    if (roomTransitionAlpha >= 255f)
+                    {
+                        roomTransitionAlpha = 255f;
+                        PerformRoomSwitch(pendingRoomName, pendingRoomSpawn);
+                        pendingRoomName = null;
+                        pendingRoomSpawn = null;
+                        roomTransitionFadingOut = false;
+                    }
+                }
+                else
+                {
+                    roomTransitionAlpha -= RoomTransitionSpeed;
+                    if (roomTransitionAlpha <= 0f)
+                    {
+                        roomTransitionAlpha = 0f;
+                        isRoomTransitioning = false;
+                    }
+                }
+
+                this.Invalidate();
+                return;
+            }
+
             HandleInput();
             player.UpdateAnimation();
 
-            if (hasSansTrigger && !sansTriggerConsumed && !isDialogueActive && !IsSansCutsceneActive && !isMenuOpen)
+            if (currentLocationName == "last_corridor" && hasSansTrigger && !sansTriggerConsumed && !isDialogueActive && !IsSansCutsceneActive && !isMenuOpen)
             {
                 float playerCenterXForTrigger = player.X + (player.Width / 2f);
                 float triggerDistanceX = Math.Abs(playerCenterXForTrigger - sansTriggerPos.X);
@@ -713,6 +1191,43 @@ namespace Undertale_False_Pacifist
                     sansTriggerConsumed = true;
                     StartSansCutscene();
                 }
+            }
+
+            if (!isDialogueActive && !IsSansCutsceneActive && !isMenuOpen)
+            {
+                float playerCenterXForCastle = player.X + (player.Width / 2f);
+                float playerCenterYForCastle = player.Y + (player.Height / 2f);
+
+                bool isInCastleZoneNow = false;
+                string targetRoomNow = null;
+                PointF? targetSpawnNow = null;
+
+                for (int i = 0; i < roomTriggers.Count; i++)
+                {
+                    float dx = playerCenterXForCastle - roomTriggers[i].Pos.X;
+                    float dy = playerCenterYForCastle - roomTriggers[i].Pos.Y;
+                    float dist = (float)Math.Sqrt(dx * dx + dy * dy);
+
+                    if (dist <= CastleTriggerRadius)
+                    {
+                        isInCastleZoneNow = true;
+                        targetRoomNow = roomTriggers[i].TargetRoom;
+
+                        if (roomTriggers[i].SpawnX.HasValue && roomTriggers[i].SpawnY.HasValue)
+                        {
+                            targetSpawnNow = new PointF(roomTriggers[i].SpawnX.Value, roomTriggers[i].SpawnY.Value);
+                        }
+
+                        break;
+                    }
+                }
+
+                if (isInCastleZoneNow && !wasInCastleTriggerZone && !string.IsNullOrEmpty(targetRoomNow))
+                {
+                    EnterRoom(targetRoomNow, targetSpawnNow);
+                }
+
+                wasInCastleTriggerZone = isInCastleZoneNow;
             }
 
             if (cutsceneStage == SansCutsceneStage.WaitingBeforePan)
@@ -769,9 +1284,11 @@ namespace Undertale_False_Pacifist
             }
             else if (cutsceneStage == SansCutsceneStage.PanningCameraBack)
             {
-                float playerCenterX = player.X + (player.Width / 2f);
+                float playerCenterX = player.X + (player.DrawWidth / 2f);
+
                 float viewportWorldWidth = VirtualCanvasWidth / cameraZoom;
                 float targetNormalCamX = playerCenterX - (viewportWorldWidth / 1.75f);
+
                 if (locationBackground != null)
                 {
                     targetNormalCamX = ClampCamera(targetNormalCamX, viewportWorldWidth, LocationWorldWidth);
@@ -782,6 +1299,7 @@ namespace Undertale_False_Pacifist
                     cutsceneCameraX = targetNormalCamX;
                     cutsceneStage = SansCutsceneStage.None;
                     sansEncounterCameraLocked = false;
+                    sansVisibleInWorld = false;
                     PlayLocationMusic();
                 }
                 else if (cutsceneCameraX > targetNormalCamX)
@@ -809,7 +1327,7 @@ namespace Undertale_False_Pacifist
                     {
                         char lastChar = fullText[Math.Min(newVisibleChars, fullText.Length) - 1];
 
-                        if (currentLine.IsSansFont && !char.IsWhiteSpace(lastChar))
+                        if (!char.IsWhiteSpace(lastChar) && currentLine.IsSansFont)
                         {
                             PlayVoiceBlip();
                         }
@@ -843,14 +1361,14 @@ namespace Undertale_False_Pacifist
 
         private void HandleInput()
         {
-            float dx = 0;
-            float dy = 0;
-
             if (isMenuOpen || isDialogueActive || IsSansCutsceneActive || introActive)
             {
                 player.IsMoving = false;
                 return;
             }
+
+            float dx = 0;
+            float dy = 0;
 
             if (pressedKeys.Contains(Keys.Left) || pressedKeys.Contains(Keys.A))
             {
@@ -880,8 +1398,24 @@ namespace Undertale_False_Pacifist
             }
 
             player.IsMoving = (dx != 0 || dy != 0);
-            player.X += dx;
-            player.Y += dy;
+
+            if (dx != 0)
+            {
+                float nextX = player.X + dx;
+                if (!CheckCollision(nextX, player.Y, player.Width, player.Height))
+                {
+                    player.X = nextX;
+                }
+            }
+
+            if (dy != 0)
+            {
+                float nextY = player.Y + dy;
+                if (!CheckCollision(player.X, nextY, player.Width, player.Height))
+                {
+                    player.Y = nextY;
+                }
+            }
 
             if (locationBackground != null)
             {
@@ -892,11 +1426,11 @@ namespace Undertale_False_Pacifist
             }
         }
 
-        private float ClampCamera(float cam, float viewportSize, float mapSize)
+        private float ClampCamera(float cam, float viewportSize, float mapSize, float centerOffset = 0f)
         {
             if (mapSize <= viewportSize)
             {
-                return -(viewportSize - mapSize) / 2f;
+                return -(viewportSize - mapSize) / 2f + centerOffset;
             }
             return Math.Max(0, Math.Min(cam, mapSize - viewportSize));
         }
@@ -964,7 +1498,6 @@ namespace Undertale_False_Pacifist
                     isDialogueActive = false;
                     dialogueQueue.Clear();
                     dialogueIndex = 0;
-                    sansVisibleInWorld = false;
 
                     cutsceneStage = SansCutsceneStage.PanningCameraBack;
                 }
@@ -976,50 +1509,58 @@ namespace Undertale_False_Pacifist
         private List<DialogueLine> BuildSansJudgementDialogue()
         {
             return new List<DialogueLine>
-            {
-                new DialogueLine("So you finally made it.", "normal", false),
-                new DialogueLine("The end of your journey is at hand.", "normal", false),
-                new DialogueLine("In a few moments, you will meet the king.", "normal", false),
-                new DialogueLine("Together... you will determine the future of this \nworld.", "normal", false),
-                new DialogueLine("That's then.", "normal", false),
-                new DialogueLine("Now.", "serious", false),
-                new DialogueLine("You will be judged.", "serious", false),
+    {
+        new DialogueLine("So you finally made it.", "normal", false),
+        new DialogueLine("The end of your journey is at hand.", "normal", false),
+        new DialogueLine("In a few moments, you will meet the king.", "normal", false),
+        new DialogueLine("Together... you will determine the future of this \nworld.", "normal", false),
+        new DialogueLine("That's then.", "normal", false),
+        new DialogueLine("Now.", "serious", false),
+        new DialogueLine("You will be judged.", "serious", false),
 
-                new DialogueLine("You will be judged for every EXP you've earned.", "serious", false),
-                new DialogueLine("What's EXP? it's an acronym.", "normal", false),
-                new DialogueLine("It stands for \"execution points\".", "normal", false),
-                new DialogueLine("A way of quantifying the pain you have inflicted \non others.", "normal", false),
-                new DialogueLine("When you kill someone, your EXP increases.", "normal", false),
-                new DialogueLine("When you have enough EXP, your LOVE increases.", "normal", false),
-                new DialogueLine("LOVE, too, is an acronym.", "normal", false),
-                new DialogueLine("It stands for \"Level of Violence\".", "normal", false),
-                new DialogueLine("A way of measuring someone's capacity to hurt.", "normal", false),
-                new DialogueLine("... But you.", "side", false),
+        new DialogueLine("You will be judged for every EXP you've earned.", "serious", false),
+        new DialogueLine("What's EXP? it's an acronym.", "normal", false),
+        new DialogueLine("It stands for \"execution points\".", "normal", false),
+        new DialogueLine("A way of quantifying the pain you have inflicted \non others.", "normal", false),
+        new DialogueLine("When you kill someone, your EXP increases.", "normal", false),
+        new DialogueLine("When you have enough EXP, your LOVE increases.", "normal", false),
+        new DialogueLine("LOVE, too, is an acronym.", "normal", false),
+        new DialogueLine("It stands for \"Level of Violence\".", "normal", false),
+        new DialogueLine("A way of measuring someone's capacity to hurt.", "normal", false),
+        new DialogueLine("... But you.", "side", false),
 
-                new DialogueLine("you never gained any LOVE.", "normal"),
-                new DialogueLine("your EXP is 0. your LV is 1.", "normal"),
-                new DialogueLine("you didn't spill a single drop of blood.", "normal"),
-                new DialogueLine("you became friends with papyrus...", "side"),
-                new DialogueLine("saved undyne, and hung out with alphys...", "side"),
-                new DialogueLine("you look like a real saint, kid.", "wink"),
+        new DialogueLine("you never gained any LOVE.", "normal"),
+        new DialogueLine("your EXP is 0. your LV is 1.", "normal"),
+        new DialogueLine("you didn't spill a single drop of blood.", "normal"),
+        new DialogueLine("you became friends with papyrus...", "side"),
+        new DialogueLine("saved undyne, and hung out with alphys...", "side"),
+        new DialogueLine("you look like a real saint, kid.", "wink"),
 
-                new DialogueLine("you know... over the years, i've learned to read \npeople by the way they walk.", "normal"),
-                new DialogueLine("Usually, those who refuse to hurt anyone move on \nwith a heavy heart.", "serious"),
-                new DialogueLine("They're thinking about the sacrifice, about how to \nsave all of us.", "serious"),
-                new DialogueLine("But you...", "serious"),
-                new DialogueLine("You're walking very quietly. too quietly.", "serious"),
-                new DialogueLine("As if you weren't going to decide anything.", "serious"),
-                new DialogueLine("it's as if you're just looking for a way to take \nwhat's yours and slip away while no one is looking.", "closed"),
+        new DialogueLine("you know... over the years, i've learned to read \npeople by the way they walk.", "normal"),
+        new DialogueLine("Usually, those who refuse to hurt anyone move on \nwith a heavy heart.", "side"),
+        new DialogueLine("They're thinking about the sacrifice, about how to \nsave all of us.", "side"),
+        new DialogueLine("They carry the weight of every choice on their \nshoulders.", "serious"),
+        new DialogueLine("But you...", "empty"),
+        new DialogueLine("You're walking very quietly. too quietly.", "empty"),
+        new DialogueLine("As if you weren't going to decide anything.", "empty"),
+        new DialogueLine("it's as if you're just looking for a way to take \nwhat's yours and slip away while no one is looking.", "closed"),
+        new DialogueLine("or maybe...", "serious"),
+        new DialogueLine("you're holding back something much worse.", "empty"),
 
-                new DialogueLine("heh. guess i'm just overthinking it.", "wink"),
-                new DialogueLine("forget it.", "closed"),
-                new DialogueLine("asgore is ahead.", "normal"),
-                new DialogueLine("he doesn't want to fight you, but he has no choice.", "side"),
-                new DialogueLine("do what you're supposed to do, kid.", "normal"),
-                new DialogueLine("Just... remember one thing.", "serious"),
-                new DialogueLine("True friends don't abandon each other in a dungeon.", "serious"),
-                new DialogueLine("good luck over there.", "normal")
-            };
+        new DialogueLine(". . .", "closed"),
+        new DialogueLine("heh. guess i'm just overthinking it.", "wink"),
+        new DialogueLine("or maybe I just slept too much on my station.", "wink"),
+        new DialogueLine("forget it.", "closed"),
+
+        new DialogueLine("asgore is ahead.", "normal"),
+        new DialogueLine("he doesn't want to fight you, but he has no choice.", "side"),
+        new DialogueLine("do what you're supposed to do, kid.", "normal"),
+        new DialogueLine("Just... remember one thing.", "serious"),
+        new DialogueLine("True friends don't abandon each other in a dungeon.", "empty"),
+        new DialogueLine("and they certainly don't play with people's lives \njust to see what happens.", "serious"),
+        new DialogueLine(". . .", "closed"),
+        new DialogueLine("See you later.", "wink")
+    };
         }
 
         public class Item
@@ -1034,6 +1575,26 @@ namespace Undertale_False_Pacifist
             }
         }
 
+        private const float WallSizeScale = 1f;
+        private const float WallSortHeightRatio = 1f;
+
+        private float GetWallSortY(WallObject w)
+        {
+            float worldWallHeight = wallTexture.Height * WallSizeScale;
+            return w.Pos.Y - (worldWallHeight * WallSortHeightRatio);
+        }
+
+        private void DrawWorldWall(Graphics g, Matrix screenMatrix, float cameraX, float cameraY, WallObject w)
+        {
+            float wallScreenX = (w.Pos.X - cameraX) * CurrentCameraZoom;
+            float wallScreenY = (w.Pos.Y - cameraY) * CurrentCameraZoom;
+            float wallW = wallTexture.Width * CurrentCameraZoom * WallSizeScale;
+            float wallH = wallTexture.Height * CurrentCameraZoom * WallSizeScale;
+
+            g.Transform = screenMatrix;
+            g.DrawImage(wallTexture, wallScreenX - wallW / 2f, wallScreenY - wallH, wallW, wallH);
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
@@ -1041,35 +1602,11 @@ namespace Undertale_False_Pacifist
             e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
             e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
             e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
-<<<<<<< HEAD
 
             float virtualWidth = 800f;
             float virtualHeight = 600f;
 
             float screenScale = Math.Min(this.ClientSize.Width / virtualWidth, this.ClientSize.Height / virtualHeight);
-
-            float screenOffsetX = (this.ClientSize.Width - (virtualWidth * screenScale)) / 2f;
-            float screenOffsetY = (this.ClientSize.Height - (virtualHeight * screenScale)) / 2f;
-
-            Matrix screenMatrix = new Matrix();
-            screenMatrix.Translate(screenOffsetX, screenOffsetY);
-            screenMatrix.Scale(screenScale, screenScale);
-
-            e.Graphics.Transform = screenMatrix;
-            e.Graphics.SetClip(new Rectangle(0, 0, (int)virtualWidth, (int)virtualHeight));
-            e.Graphics.Clear(Color.Black);
-=======
->>>>>>> Обязательно
-
-            float virtualWidth = 800f;
-            float virtualHeight = 600f;
-
-<<<<<<< HEAD
-            float viewportWorldWidth = virtualWidth / cameraZoom;
-            float viewportWorldHeight = virtualHeight / cameraZoom;
-=======
-            float screenScale = Math.Min(this.ClientSize.Width / virtualWidth, this.ClientSize.Height / virtualHeight);
->>>>>>> Обязательно
 
             float screenOffsetX = (this.ClientSize.Width - (virtualWidth * screenScale)) / 2f;
             float screenOffsetY = (this.ClientSize.Height - (virtualHeight * screenScale)) / 2f;
@@ -1083,66 +1620,39 @@ namespace Undertale_False_Pacifist
                 screenMatrix.Translate(screenOffsetX, screenOffsetY);
                 screenMatrix.Scale(screenScale, screenScale);
 
-<<<<<<< HEAD
-            Matrix cameraMatrix = screenMatrix.Clone();
-            cameraMatrix.Scale(cameraZoom, cameraZoom);
-            cameraMatrix.Translate(-cameraX, -cameraY);
-            e.Graphics.Transform = cameraMatrix;
-
-            if (locationBackground != null)
-            {
-                e.Graphics.DrawImage(locationBackground, 0, 0, LocationWorldWidth, LocationWorldHeight);
-            }
-
-            e.Graphics.Transform = screenMatrix;
-
-            float playerScreenX = (player.X - cameraX) * cameraZoom;
-            float playerScreenY = (player.Y - cameraY) * cameraZoom;
-
-            using (Matrix playerMatrix = screenMatrix.Clone())
-            {
-                playerMatrix.Translate(playerScreenX - player.X, playerScreenY - player.Y);
-                e.Graphics.Transform = playerMatrix;
-                player.Draw(e.Graphics, friskSprite);
-            }
-
-            e.Graphics.Transform = screenMatrix;
-
-            if (columnTexture != null)
-            {
-                foreach (float colX in foregroundColumns)
-=======
                 e.Graphics.Transform = screenMatrix;
                 e.Graphics.SetClip(new Rectangle(0, 0, (int)virtualWidth, (int)virtualHeight));
                 e.Graphics.Clear(Color.Black);
 
                 if (introActive)
->>>>>>> Обязательно
                 {
                     DrawIntro(e.Graphics, virtualWidth, virtualHeight);
                     return;
                 }
 
-                float playerCenterX = player.X + (player.Width / 2f);
-                float playerCenterY = player.Y + (player.Height / 2f);
+                float playerCenterX = player.X + (player.DrawWidth / 2f);
+                float playerCenterY = player.Y + (player.DrawHeight / 2f);
 
-                float viewportWorldWidth = virtualWidth / cameraZoom;
-                float viewportWorldHeight = virtualHeight / cameraZoom;
+                float viewportWorldWidth = virtualWidth / BaseCameraZoom;
+                float viewportWorldHeight = virtualHeight / BaseCameraZoom;
 
                 float cameraX;
-                float cameraY = 0f;
+                float cameraY;
 
                 if (sansEncounterCameraLocked)
                 {
                     cameraX = cutsceneCameraX;
+                    cameraY = 0f;
                 }
                 else
                 {
-                    cameraX = playerCenterX - (viewportWorldWidth / 1.75f);
+                    cameraX = playerCenterX - (viewportWorldWidth / 2f + 30);
+                    cameraY = playerCenterY - (viewportWorldHeight / 2f + 30);
 
                     if (locationBackground != null)
                     {
-                        cameraX = ClampCamera(cameraX, viewportWorldWidth, LocationWorldWidth);
+                        cameraX = ClampCamera(cameraX, viewportWorldWidth, LocationWorldWidth, 0f);
+                        cameraY = ClampCamera(cameraY, viewportWorldHeight, LocationWorldHeight, 0f);
                     }
                 }
 
@@ -1159,9 +1669,104 @@ namespace Undertale_False_Pacifist
                     {
                         e.Graphics.DrawImage(locationBackground, 0, 0, LocationWorldWidth, LocationWorldHeight);
                     }
+
+                    if (showCollisions)
+                    {
+                        using (Pen redPen = new Pen(Color.FromArgb(220, Color.Red), 1f))
+                        using (SolidBrush redBrush = new SolidBrush(Color.FromArgb(80, Color.Red)))
+                        using (Pen yellowPen = new Pen(Color.Yellow, 1f))
+                        using (Pen bluePen = new Pen(Color.Cyan, 1.5f))
+                        using (Pen greenPen = new Pen(Color.Lime, 1f))
+                        using (SolidBrush greenBrush = new SolidBrush(Color.FromArgb(60, Color.Lime)))
+                        {
+                            foreach (var box in collisionBoxes)
+                            {
+                                e.Graphics.FillRectangle(redBrush, box.Rect);
+                                e.Graphics.DrawRectangle(redPen, box.Rect.X, box.Rect.Y, box.Rect.Width, box.Rect.Height);
+                            }
+
+                            if (isCreatingCollision)
+                            {
+                                float x = Math.Min(collisionDragStart.X, collisionDragCurrent.X);
+                                float y = Math.Min(collisionDragStart.Y, collisionDragCurrent.Y);
+                                float w = Math.Abs(collisionDragCurrent.X - collisionDragStart.X);
+                                float h = Math.Abs(collisionDragCurrent.Y - collisionDragStart.Y);
+
+                                e.Graphics.DrawRectangle(yellowPen, x, y, w, h);
+                            }
+
+                            e.Graphics.DrawRectangle(
+                                bluePen,
+                                player.X + player.HitboxOffsetX,
+                                player.Y + player.HitboxOffsetY,
+                                player.Width,
+                                player.Height
+                            );
+
+                            if (currentLocationName == "last_corridor" && hasSansTrigger && !sansTriggerConsumed)
+                            {
+                                float trigX = sansTriggerPos.X - TriggerRadius;
+                                float trigY = sansTriggerPos.Y - TriggerRadius;
+                                float diameter = TriggerRadius * 2f;
+
+                                e.Graphics.FillEllipse(greenBrush, trigX, trigY, diameter, diameter);
+                                e.Graphics.DrawEllipse(greenPen, trigX, trigY, diameter, diameter);
+
+                                e.Graphics.FillEllipse(Brushes.Lime, sansTriggerPos.X - 2f, sansTriggerPos.Y - 2f, 4f, 4f);
+                            }
+
+                            using (Pen orangePen = new Pen(Color.Orange, 1f))
+                            using (SolidBrush orangeBrush = new SolidBrush(Color.FromArgb(80, Color.Orange)))
+                            using (Font labelFont = new Font("Consolas", 6f))
+                            {
+                                foreach (var trig in roomTriggers)
+                                {
+                                    float trigX = trig.Pos.X - CastleTriggerRadius;
+                                    float trigY = trig.Pos.Y - CastleTriggerRadius;
+                                    float diameter = CastleTriggerRadius * 2f;
+
+                                    e.Graphics.FillEllipse(orangeBrush, trigX, trigY, diameter, diameter);
+                                    e.Graphics.DrawEllipse(orangePen, trigX, trigY, diameter, diameter);
+
+                                    e.Graphics.FillEllipse(Brushes.Orange, trig.Pos.X - 2f, trig.Pos.Y - 2f, 4f, 4f);
+
+                                    e.Graphics.DrawString(trig.TargetRoom, labelFont, Brushes.Orange, trig.Pos.X - CastleTriggerRadius, trig.Pos.Y + CastleTriggerRadius + 1f);
+                                }
+                            }
+
+                            using (Pen magentaPen = new Pen(Color.Magenta, 1f))
+                            using (Pen sortLinePen = new Pen(Color.Cyan, 1f))
+                            {
+                                foreach (var w in worldWalls)
+                                {
+                                    e.Graphics.DrawLine(magentaPen, w.Pos.X - 6f, w.Pos.Y, w.Pos.X + 6f, w.Pos.Y);
+                                    e.Graphics.DrawLine(magentaPen, w.Pos.X, w.Pos.Y - 6f, w.Pos.X, w.Pos.Y + 6f);
+
+                                    if (wallTexture != null)
+                                    {
+                                        float sortY = GetWallSortY(w);
+                                        e.Graphics.DrawLine(sortLinePen, w.Pos.X - 10f, sortY, w.Pos.X + 10f, sortY);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 e.Graphics.Transform = screenMatrix;
+
+                float playerFeetY = player.Y + player.HitboxOffsetY + player.Height;
+
+                if (wallTexture != null)
+                {
+                    foreach (var w in worldWalls)
+                    {
+                        if (playerFeetY <= GetWallSortY(w))
+                        {
+                            DrawWorldWall(e.Graphics, screenMatrix, cameraX, cameraY, w);
+                        }
+                    }
+                }
 
                 float playerScreenX = (player.X - cameraX) * CurrentCameraZoom;
                 float playerScreenY = (player.Y - cameraY) * CurrentCameraZoom;
@@ -1171,6 +1776,19 @@ namespace Undertale_False_Pacifist
                     playerMatrix.Translate(playerScreenX - player.X, playerScreenY - player.Y);
                     e.Graphics.Transform = playerMatrix;
                     player.Draw(e.Graphics, friskSprite);
+                }
+
+                e.Graphics.Transform = screenMatrix;
+
+                if (wallTexture != null)
+                {
+                    foreach (var w in worldWalls)
+                    {
+                        if (playerFeetY > GetWallSortY(w))
+                        {
+                            DrawWorldWall(e.Graphics, screenMatrix, cameraX, cameraY, w);
+                        }
+                    }
                 }
 
                 e.Graphics.Transform = screenMatrix;
@@ -1225,17 +1843,16 @@ namespace Undertale_False_Pacifist
                         e.Graphics.FillRectangle(fadeBrush, 0, 0, virtualWidth, virtualHeight);
                     }
                 }
-            }
-<<<<<<< HEAD
 
-            e.Graphics.Transform = screenMatrix;
-
-            if (isMenuOpen)
-            {
-                DrawInventory(e.Graphics);
+                if (isRoomTransitioning)
+                {
+                    int a = (int)Math.Max(0, Math.Min(255, roomTransitionAlpha));
+                    using (SolidBrush transitionBrush = new SolidBrush(Color.FromArgb(a, Color.Black)))
+                    {
+                        e.Graphics.FillRectangle(transitionBrush, 0, 0, virtualWidth, virtualHeight);
+                    }
+                }
             }
-=======
->>>>>>> Обязательно
         }
 
         private void DrawInventory(Graphics g)
@@ -1423,6 +2040,11 @@ namespace Undertale_False_Pacifist
             g.DrawString("* " + visibleText, fontToUse, Brushes.White, boxX + textOffsetX, boxY + 25);
 
             g.TextRenderingHint = prevHint;
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+
         }
     }
 }
